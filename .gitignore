@@ -13,3 +13,5 @@ client_secret*.json
 *.json.key
 gcp-sa-*.json
 .pytest_cache/
+*creds*.json
+gads*.json

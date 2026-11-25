@@ -31,18 +31,21 @@ python -c "import secrets;print(secrets.token_urlsafe(48),end='')" | gcloud secr
 ```
 If the OAuth client's consent screen is External + *Testing*, its refresh token expires after 7 days.
 
-## IAM (once)
+## Identity: one service account builds AND runs it
+`sa-gads-ai-runner@celestial-feat-513918-q9.iam.gserviceaccount.com`
+- Set it as the **Service account** on the Cloud Build trigger.
+- cloudbuild.yaml deploys the service with `--service-account` = the same SA.
+- It already has: Cloud Build Admin, Cloud Run Admin, Cloud Run Builder, Secret Manager Secret Accessor, Storage Object Admin.
+- **Still needed (the pre-flight checks these and names what is missing):**
 ```bash
-PN=420586828501   # project number
-CB=$PN@cloudbuild.gserviceaccount.com          # Cloud Build SA (may be $PN-compute@developer... in newer projects)
-RT=$PN-compute@developer.gserviceaccount.com   # Cloud Run runtime SA
-for r in roles/run.admin roles/iam.serviceAccountUser roles/artifactregistry.admin; do
-  gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$CB --role=$r; done
-for s in gads-credentials pmax-app-password pmax-secret-key; do
-  for m in $CB $RT; do gcloud secrets add-iam-policy-binding $s --project $PROJECT \
-    --member=serviceAccount:$m --role=roles/secretmanager.secretAccessor; done; done
+SA=serviceAccount:sa-gads-ai-runner@$PROJECT.iam.gserviceaccount.com
+gcloud projects add-iam-policy-binding $PROJECT --member=$SA --role=roles/artifactregistry.admin   # push images / create the repo (writer is enough once the repo exists)
+gcloud projects add-iam-policy-binding $PROJECT --member=$SA --role=roles/logging.logWriter        # build logs (custom build SA)
+gcloud iam service-accounts add-iam-policy-binding sa-gads-ai-runner@$PROJECT.iam.gserviceaccount.com \
+  --member=$SA --role=roles/iam.serviceAccountUser                                                  # deploy a service that runs as itself (Cloud Run Admin does not include actAs)
 ```
-(Cloud Build reads the secrets for the pre-flight check; the Cloud Run runtime SA reads them at runtime.)
+Storage Object Admin does not cover Artifact Registry (it only covers the old gcr.io buckets).
+`scripts/preflight.py` (step 1 of the build) verifies all of this with `testIamPermissions` and lists every gap in one failure.
 
 ## What cloudbuild.yaml does on every push to `main`
 1. **preflight**: the 3 secrets exist and are valid (JSON has all 4 keys, password 12+, key 32+), Cloud Build can reach Cloud Run in the region.

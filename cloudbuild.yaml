@@ -4,6 +4,7 @@ substitutions:
   _REGION: asia-south1                    # VERIFY
   _SERVICE: pmax-themer
   _AR_REPO: pmax-themer
+  _RUN_SA_NAME: sa-gads-ai-runner         # builds AND runs the service (trigger must use this SA too)
   _ADMIN_EMAILS: jakaria.ahmed@wppmedia.com
   _ALLOWED_EMAILS: ""
   _ALLOWED_DOMAINS: ""
@@ -30,17 +31,7 @@ steps:
     secretEnv: [GADS_JSON, APP_PW, SECRET_KEY_VAL]
     args:
       - -c
-      - |
-        set -u
-        fail() { echo "PREFLIGHT FAILED: $$1"; exit 1; }
-        [ -n "$${GADS_JSON:-}" ] || fail "secret gads-credentials missing/empty, or Cloud Build SA lacks secretAccessor on it"
-        [ "$${#APP_PW}" -ge 12 ] || fail "secret pmax-app-password missing or shorter than 12 chars"
-        [ "$${#SECRET_KEY_VAL}" -ge 32 ] || fail "secret pmax-secret-key missing or shorter than 32 chars"
-        python3 -c 'import json,os,sys; d=json.loads(os.environ["GADS_JSON"]); m=[k for k in ("developer_token","client_id","client_secret","refresh_token") if not d.get(k)]; print("missing keys:", m) if m else None; sys.exit(1 if m else 0)' \
-          || fail "gads-credentials is not valid JSON or is missing keys"
-        gcloud run services list --region=${_REGION} --project=$PROJECT_ID --limit=1 >/dev/null \
-          || fail "Cloud Build SA cannot reach Cloud Run (needs roles/run.admin) or region ${_REGION} is wrong"
-        echo "preflight OK"
+      - python3 scripts/preflight.py $PROJECT_ID ${_REGION} ${_RUN_SA_NAME}@$PROJECT_ID.iam.gserviceaccount.com ${_AR_REPO}
 
   # ---- 2. tests
   - id: test
@@ -79,6 +70,7 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
       - --region=${_REGION}
       - --platform=managed
+      - --service-account=${_RUN_SA_NAME}@$PROJECT_ID.iam.gserviceaccount.com
       - --allow-unauthenticated            # the app's own login is the gate
       - --max-instances=1
       - --concurrency=20
@@ -95,6 +87,7 @@ steps:
         URL=$(gcloud run services describe ${_SERVICE} --region=${_REGION} --project=$PROJECT_ID --format='value(status.url)')
         code=$(curl -s -o /dev/null -w '%{http_code}' "$$URL/login")
         echo "GET /login -> $$code ($$URL)"
+        [ "$$code" = "403" ] && echo "403 = public access blocked (org policy on allUsers?). Service is deployed but not reachable publicly."
         [ "$$code" = "200" ]
 
 images:
