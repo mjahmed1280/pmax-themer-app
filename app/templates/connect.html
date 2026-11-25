@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Connect Google Ads · PMax Themer{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="card login">
+    <div class="brand big"><span class="logo" aria-hidden="true">◆</span> PMax Themer</div>
+    <h2>Connect your Google Ads access</h2>
+    <p class="muted">To show only the accounts <b>you</b> can use, Google will ask you to sign in and allow this app
+      to access Google Ads on your behalf. The app can only do what your own Google Ads permissions allow, and new asset
+      groups are always created paused. You can disconnect at any time.</p>
+    {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+    <a class="btn primary" href="/oauth/start">Connect with Google</a>
+    <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="link" type="submit">Cancel</button></form>
+  </div>
+</div>
+{% endblock %}

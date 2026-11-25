@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Access denied · PMax Themer{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="card login">
+    <div class="brand big"><span class="logo" aria-hidden="true">◆</span> PMax Themer</div>
+    <div class="alert alert-error" role="alert">
+      Your account isn't allowed to use this deployment{% if org %} ({{ org }}){% endif %}.
+      Ask the app administrator to grant you access, then reload.
+    </div>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn" type="submit">Sign out</button></form>
+  </div>
+</div>
+{% endblock %}

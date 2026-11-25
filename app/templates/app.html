@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="layout">
+  <nav class="stepper" id="stepper" aria-label="Steps"></nav>
+  <section class="stage" id="stage" aria-live="polite"></section>
+  <aside class="summary card" id="summary" aria-label="Selection summary"></aside>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

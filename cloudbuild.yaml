@@ -1,0 +1,101 @@
+# GitHub push -> Cloud Build -> pre-flight checks -> tests -> Artifact Registry -> Cloud Run.
+# Everything is created/checked by this file; only the 3 secrets (see DEPLOY.md) must exist beforehand.
+substitutions:
+  _REGION: asia-south1                    # VERIFY
+  _SERVICE: pmax-themer
+  _AR_REPO: pmax-themer
+  _ADMIN_EMAILS: jakaria.ahmed@wppmedia.com
+  _ALLOWED_EMAILS: ""
+  _ALLOWED_DOMAINS: ""
+  _ORG_NAME: ABG
+  _ALLOW_MUTATE: "false"                  # "true" only after a verified real dry-run
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/gads-credentials/versions/latest
+      env: GADS_JSON
+    - versionName: projects/$PROJECT_ID/secrets/pmax-app-password/versions/latest
+      env: APP_PW
+    - versionName: projects/$PROJECT_ID/secrets/pmax-secret-key/versions/latest
+      env: SECRET_KEY_VAL
+
+steps:
+  # ---- 1. pre-flight: fail early with a clear message (secret values are never printed)
+  - id: preflight
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    secretEnv: [GADS_JSON, APP_PW, SECRET_KEY_VAL]
+    args:
+      - -c
+      - |
+        set -u
+        fail() { echo "PREFLIGHT FAILED: $$1"; exit 1; }
+        [ -n "$${GADS_JSON:-}" ] || fail "secret gads-credentials missing/empty, or Cloud Build SA lacks secretAccessor on it"
+        [ "$${#APP_PW}" -ge 12 ] || fail "secret pmax-app-password missing or shorter than 12 chars"
+        [ "$${#SECRET_KEY_VAL}" -ge 32 ] || fail "secret pmax-secret-key missing or shorter than 32 chars"
+        python3 -c 'import json,os,sys; d=json.loads(os.environ["GADS_JSON"]); m=[k for k in ("developer_token","client_id","client_secret","refresh_token") if not d.get(k)]; print("missing keys:", m) if m else None; sys.exit(1 if m else 0)' \
+          || fail "gads-credentials is not valid JSON or is missing keys"
+        gcloud run services list --region=${_REGION} --project=$PROJECT_ID --limit=1 >/dev/null \
+          || fail "Cloud Build SA cannot reach Cloud Run (needs roles/run.admin) or region ${_REGION} is wrong"
+        echo "preflight OK"
+
+  # ---- 2. tests
+  - id: test
+    name: python:3.12-slim
+    entrypoint: bash
+    args: ["-c", "pip install -q -r requirements-dev.txt && python -m pytest -q"]
+
+  # ---- 3. Artifact Registry repo (created once, idempotent)
+  - id: ensure-artifact-repo
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud artifacts repositories describe ${_AR_REPO} --location=${_REGION} --project=$PROJECT_ID >/dev/null 2>&1 \
+          || gcloud artifacts repositories create ${_AR_REPO} --repository-format=docker \
+               --location=${_REGION} --project=$PROJECT_ID --description="pmax-themer images"
+
+  # ---- 4. build + push
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA", "."]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA"]
+
+  # ---- 5. deploy
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated            # the app's own login is the gate
+      - --max-instances=1
+      - --concurrency=20
+      - --set-env-vars=^@^ENV=prod@AUTH_MODE=basic@ADS_ACCESS=shared@ADS_BACKEND=real@ALLOW_MUTATE=${_ALLOW_MUTATE}@APP_USER=ops@ORG_NAME=${_ORG_NAME}@ADMIN_EMAILS=${_ADMIN_EMAILS}@ALLOWED_EMAILS=${_ALLOWED_EMAILS}@ALLOWED_DOMAINS=${_ALLOWED_DOMAINS}
+      - --set-secrets=SECRET_KEY=pmax-secret-key:latest,APP_PASSWORD=pmax-app-password:latest,GOOGLE_ADS_CREDENTIALS_JSON=gads-credentials:latest
+
+  # ---- 6. post-deploy smoke test: the login page must answer 200
+  - id: smoke
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        URL=$(gcloud run services describe ${_SERVICE} --region=${_REGION} --project=$PROJECT_ID --format='value(status.url)')
+        code=$(curl -s -o /dev/null -w '%{http_code}' "$$URL/login")
+        echo "GET /login -> $$code ($$URL)"
+        [ "$$code" = "200" ]
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA

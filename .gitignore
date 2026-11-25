@@ -1,0 +1,15 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/*
+!data/.gitkeep
+google-ads.yaml
+# OAuth client secrets / key files - NEVER commit (GitHub -> Cloud Build trigger would publish them)
+abg_*.json
+*concentscreen*.json
+client_secret*.json
+*oauth*.json
+*.json.key
+gcp-sa-*.json
+.pytest_cache/

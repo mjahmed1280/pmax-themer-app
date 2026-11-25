@@ -1,0 +1,10 @@
+.env
+.venv
+data
+tests
+__pycache__
+*.pyc
+.pytest_cache
+google-ads.yaml
+*.json
+*.md
