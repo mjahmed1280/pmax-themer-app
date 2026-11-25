@@ -35,7 +35,8 @@ class Container:
 def build_container(s: Settings) -> Container:
     s.validate_runtime()
     data = Path(s.data_dir)
-    access = AccessPolicy(FileAccessStore(data / "access.json"), s.admin_list, s.allowed_email_list, s.allowed_domain_list)
+    access = AccessPolicy(FileAccessStore(data / "access.json"), s.admin_list,
+                          s.allowed_email_list + list(s.login_users), s.allowed_domain_list)
     auth = StaticLoginProvider(s)
     if s.ads_backend == "mock":
         backend: AdsBackend = MockBackend()

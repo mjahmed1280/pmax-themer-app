@@ -31,16 +31,29 @@ class StaticLoginProvider:
         key = request.client.host if request.client else "?"
         if self._throttled(key):
             return False
-        ok = secrets.compare_digest(username.encode(), self.s.app_user.encode()) & \
-            secrets.compare_digest(password.encode(), self.s.app_password.encode())
+        users = self.s.login_users
+        if users:
+            # multi-user: username is the email. Compare against every entry so timing does not reveal valid names.
+            uname = username.strip().lower()
+            ok = False
+            for u, pw in users.items():
+                hit = secrets.compare_digest(uname.encode(), u.encode()) & secrets.compare_digest(password.encode(), pw.encode())
+                ok = ok or bool(hit)
+            who = uname
+        else:
+            ok = secrets.compare_digest(username.encode(), self.s.app_user.encode()) & \
+                secrets.compare_digest(password.encode(), self.s.app_password.encode())
+            who = None
         if not ok:
             _FAILS.setdefault(key, []).append(time.time())
             return False
         request.session.clear()
         request.session["gate"] = True        # passed the shared login
         if self.s.ads_access == "shared":
-            # Shared identity maps to the first admin email so the admin UI works.
-            request.session.update({"email": (self.s.admin_list or ["demo@local"])[0], "name": self.s.app_user})
+            if who:          # multi-user: the person's own email (admin if listed in ADMIN_EMAILS)
+                request.session.update({"email": who, "name": who})
+            else:            # single shared login maps to the first admin email so the admin UI works
+                request.session.update({"email": (self.s.admin_list or ["demo@local"])[0], "name": self.s.app_user})
         # user mode: the identity comes from the Google consent step (/connect)
         return True
 

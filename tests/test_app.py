@@ -300,3 +300,42 @@ def test_ads_credentials_single_json_secret():
     assert s.env_creds_complete and s.google_ads_login_customer_id == "123"
     with pytest.raises(Exception):
         Settings(_env_file=None, google_ads_credentials_json="{bad")
+
+
+# ---------------------------------------------------- multi-user login (APP_USERS_JSON)
+import json as _json
+
+MULTI = dict(BASIC, app_users_json=_json.dumps({"admin@corp.com": "admin-password-12", "user@corp.com": "user-password-123"}))
+
+
+def _login_as(c, user, pw):
+    csrf = re.search(r'name="csrf" value="([^"]+)"', c.get("/login").text).group(1)
+    return c.post("/login", data={"username": user, "password": pw, "csrf": csrf}, follow_redirects=False)
+
+
+def test_multi_user_admin_and_normal_user(tmp_path):
+    adm = TestClient(make(tmp_path, **MULTI), base_url="https://testserver")
+    assert _login_as(adm, "ADMIN@corp.com", "admin-password-12").status_code == 303        # username is case-insensitive
+    me = adm.get("/api/me").json()["user"]
+    assert me["email"] == "admin@corp.com" and me["is_admin"] is True
+    usr = TestClient(make(tmp_path, **MULTI), base_url="https://testserver")
+    assert _login_as(usr, "user@corp.com", "user-password-123").status_code == 303
+    me = usr.get("/api/me").json()["user"]
+    assert me["email"] == "user@corp.com" and me["is_admin"] is False
+    assert usr.get("/api/admin/access").status_code == 403                                 # not an admin
+    assert usr.get("/admin", follow_redirects=False).status_code == 403
+
+
+def test_multi_user_wrong_password_or_name(tmp_path):
+    c = TestClient(make(tmp_path, **MULTI), base_url="https://testserver")
+    assert _login_as(c, "user@corp.com", "admin-password-12").status_code == 401           # another user's password
+    assert _login_as(c, "ops", "admin-password-12").status_code == 401                     # old shared username gone
+
+
+def test_multi_user_config_validation(tmp_path):
+    with pytest.raises(RuntimeError):
+        make(tmp_path, **{**BASIC, "app_users_json": _json.dumps({"not-an-email": "long-enough-password"})})
+    with pytest.raises(RuntimeError):
+        make(tmp_path, **{**BASIC, "app_users_json": _json.dumps({"a@b.com": "short"})})
+    with pytest.raises(RuntimeError):
+        make(tmp_path, **{**BASIC, "app_users_json": "[1,2]"})

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     ads_access: str = "shared"
     oauth_redirect_uri: str = ""       # optional; default = <request host>/oauth/callback
 
+    # Multi-user login: JSON object {"email": "password", ...}. The username IS the email.
+    # Admins = ADMIN_EMAILS; every other listed user is a normal (non-admin) user. Overrides APP_USER/APP_PASSWORD.
+    app_users_json: str = ""
     app_user: str = "demo"
     app_password: str = "demo123"
     secret_key: str = ""
@@ -101,6 +104,20 @@ class Settings(BaseSettings):
         return _csv(self.allowed_domains)
 
     @property
+    def login_users(self) -> dict[str, str]:
+        """{email: password} from APP_USERS_JSON ({} if unset). Raises ValueError if malformed."""
+        if not self.app_users_json.strip():
+            return {}
+        import json
+        try:
+            raw = json.loads(self.app_users_json)
+            if not isinstance(raw, dict) or not raw:
+                raise ValueError
+            return {str(k).strip().lower(): str(v) for k, v in raw.items()}
+        except ValueError:
+            raise ValueError("APP_USERS_JSON must be a JSON object {\"email\": \"password\"}") from None
+
+    @property
     def yaml_path(self) -> Path:
         p = Path(self.google_ads_yaml_path)
         return p if p.is_absolute() else (BASE_DIR / p).resolve()
@@ -134,7 +151,15 @@ class Settings(BaseSettings):
             problems = []
             if not self.secret_key:
                 problems.append("SECRET_KEY must be set")
-            if self.app_password in ("", "demo123") or len(self.app_password) < 12:
+            try:
+                users = self.login_users
+            except ValueError as e:
+                users, problems = {}, problems + [str(e)]
+            if users:
+                bad = [u for u, pw in users.items() if "@" not in u or len(pw) < 12 or pw == "demo123"]
+                if bad:
+                    problems.append("APP_USERS_JSON: usernames must be emails and passwords 12+ chars (check: " + ", ".join(bad) + ")")
+            elif self.app_password in ("", "demo123") or len(self.app_password) < 12:
                 problems.append("APP_PASSWORD must be set to a non-default value of 12+ characters")
             if self.admin_list in ([], ["demo@local"]):
                 problems.append("ADMIN_EMAILS must be set to a real address")
