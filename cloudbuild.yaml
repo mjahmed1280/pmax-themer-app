@@ -4,6 +4,7 @@ substitutions:
   _REGION: asia-south1                    # VERIFY
   _SERVICE: pmax-themer
   _AR_REPO: pmax-themer
+  _LOGS_BUCKET: celestial-feat-513918-q9-pmax-build-logs   # create once (see DEPLOY.md)
   _RUN_SA_NAME: sa-gads-ai-runner         # builds AND runs the service (trigger must use this SA too)
   _ADMIN_EMAILS: jakaria.ahmed@wppmedia.com
   _ALLOWED_EMAILS: ""
@@ -11,8 +12,10 @@ substitutions:
   _ORG_NAME: ABG
   _ALLOW_MUTATE: "false"                  # "true" only after a verified real dry-run
 
+# Custom build SA without Logs Writer: log to a bucket the SA can already write (Storage Object Admin).
 options:
-  logging: CLOUD_LOGGING_ONLY
+  logging: GCS_ONLY
+  logsBucket: gs://${_LOGS_BUCKET}
 
 availableSecrets:
   secretManager:
@@ -31,7 +34,7 @@ steps:
     secretEnv: [GADS_JSON, APP_PW, SECRET_KEY_VAL]
     args:
       - -c
-      - python3 scripts/preflight.py $PROJECT_ID ${_REGION} ${_RUN_SA_NAME}@$PROJECT_ID.iam.gserviceaccount.com ${_AR_REPO}
+      - python3 scripts/preflight.py $PROJECT_ID ${_REGION} ${_RUN_SA_NAME}@$PROJECT_ID.iam.gserviceaccount.com ${_AR_REPO} ${_LOGS_BUCKET}
 
   # ---- 2. tests
   - id: test

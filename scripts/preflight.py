@@ -5,7 +5,7 @@ Runs inside the cloud-sdk builder as the build service account. Checks (secret v
   2. the build identity holds the IAM permissions the pipeline needs (via testIamPermissions, which
      needs no permission itself), and says which role to grant when one is missing
   3. the region works for Cloud Run
-Usage: python3 scripts/preflight.py PROJECT_ID REGION RUN_SA_EMAIL AR_REPO
+Usage: python3 scripts/preflight.py PROJECT_ID REGION RUN_SA_EMAIL AR_REPO LOGS_BUCKET
 """
 from __future__ import annotations
 
@@ -16,13 +16,13 @@ import sys
 import urllib.error
 import urllib.request
 
-project, region, run_sa, ar_repo = sys.argv[1:5]
+project, region, run_sa, ar_repo, logs_bucket = sys.argv[1:6]
 problems: list[str] = []
 
 
 def sh(*cmd: str) -> tuple[int, str]:
     p = subprocess.run(cmd, capture_output=True, text=True)
-    return p.returncode, (p.stdout or "").strip()
+    return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()
 
 
 _, who = sh("gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)")
@@ -65,13 +65,15 @@ need_project = {
     "run.services.create": "roles/run.admin",
     "run.services.update": "roles/run.admin",
     "run.services.setIamPolicy": "roles/run.admin (needed for --allow-unauthenticated)",
-    "logging.logEntries.create": "roles/logging.logWriter (needed to write build logs with a custom build SA)",
     "secretmanager.versions.access": "roles/secretmanager.secretAccessor",
 }
 # Artifact Registry: if the repo exists check upload on it, otherwise we must be able to create it.
-rc, _ = sh("gcloud", "artifacts", "repositories", "describe", ar_repo, f"--location={region}", f"--project={project}")
+rc, out = sh("gcloud", "artifacts", "repositories", "describe", ar_repo, f"--location={region}", f"--project={project}")
 repo_exists = rc == 0
-if not repo_exists:
+repo_denied = rc != 0 and ("PERMISSION_DENIED" in out or "does not have permission" in out)
+if repo_denied:
+    problems.append(f"no access to Artifact Registry repo '{ar_repo}' -> grant roles/artifactregistry.writer on that repo to the build identity")
+elif not repo_exists:
     need_project["artifactregistry.repositories.create"] = "roles/artifactregistry.admin (repo does not exist yet)"
 
 if token:
@@ -88,6 +90,16 @@ if token:
         if got is not None and "artifactregistry.repositories.uploadArtifacts" not in got:
             problems.append("missing permission artifactregistry.repositories.uploadArtifacts -> "
                             "grant roles/artifactregistry.writer on the repo (or project) to the build identity")
+
+    try:   # logs bucket must be writable (GCS_ONLY logging, no Logs Writer role needed)
+        req = urllib.request.Request(
+            f"https://storage.googleapis.com/storage/v1/b/{logs_bucket}/iam/testPermissions?permissions=storage.objects.create",
+            headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            if "storage.objects.create" not in json.load(r).get("permissions", []):
+                problems.append(f"build identity cannot write to logs bucket gs://{logs_bucket} -> grant roles/storage.objectAdmin on it")
+    except (urllib.error.URLError, ValueError) as e:
+        problems.append(f"logs bucket gs://{logs_bucket} not reachable ({e}); create it (see DEPLOY.md)")
 
     got = test_perms(f"https://iam.googleapis.com/v1/projects/-/serviceAccounts/{run_sa}:testIamPermissions",
                      ["iam.serviceAccounts.actAs"])

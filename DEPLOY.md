@@ -36,16 +36,36 @@ If the OAuth client's consent screen is External + *Testing*, its refresh token 
 - Set it as the **Service account** on the Cloud Build trigger.
 - cloudbuild.yaml deploys the service with `--service-account` = the same SA.
 - It already has: Cloud Build Admin, Cloud Run Admin, Cloud Run Builder, Secret Manager Secret Accessor, Storage Object Admin.
-- **Still needed (the pre-flight checks these and names what is missing):**
+- Storage Object Admin does not cover Artifact Registry (only the old gcr.io buckets), and Cloud Run Admin does not include "act as a service account".
+
+### A. Self-service (needs only roles the deploying human already has: Artifact Registry Admin, Storage Admin)
 ```bash
+PROJECT=celestial-feat-513918-q9; REGION=asia-south1
 SA=serviceAccount:sa-gads-ai-runner@$PROJECT.iam.gserviceaccount.com
-gcloud projects add-iam-policy-binding $PROJECT --member=$SA --role=roles/artifactregistry.admin   # push images / create the repo (writer is enough once the repo exists)
-gcloud projects add-iam-policy-binding $PROJECT --member=$SA --role=roles/logging.logWriter        # build logs (custom build SA)
-gcloud iam service-accounts add-iam-policy-binding sa-gads-ai-runner@$PROJECT.iam.gserviceaccount.com \
-  --member=$SA --role=roles/iam.serviceAccountUser                                                  # deploy a service that runs as itself (Cloud Run Admin does not include actAs)
+# 1. Artifact Registry repo + let the runner push to it (resource-level grant, no project IAM admin needed)
+gcloud artifacts repositories create pmax-themer --repository-format=docker --location=$REGION --project=$PROJECT
+gcloud artifacts repositories add-iam-policy-binding pmax-themer --location=$REGION --project=$PROJECT \
+  --member=$SA --role=roles/artifactregistry.writer
+# 2. Build-log bucket (the runner already has Storage Object Admin; this avoids needing Logs Writer)
+gcloud storage buckets create gs://$PROJECT-pmax-build-logs --location=$REGION --project=$PROJECT
+# 3. The 3 secrets (see above)
 ```
-Storage Object Admin does not cover Artifact Registry (it only covers the old gcr.io buckets).
-`scripts/preflight.py` (step 1 of the build) verifies all of this with `testIamPermissions` and lists every gap in one failure.
+
+### B. Needs the client's IT (project/SA IAM admin) - ONE grant
+```bash
+gcloud iam service-accounts add-iam-policy-binding sa-gads-ai-runner@$PROJECT.iam.gserviceaccount.com \
+  --member=serviceAccount:sa-gads-ai-runner@$PROJECT.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser
+```
+(Cloud Run only lets a deployer attach/run as a service account if the deployer may act as it. Here the deployer and the runtime identity are the same SA.)
+
+### C. Questions for IT
+- Does an org policy block public Cloud Run (`iam.allowedPolicyMemberDomains` / "allUsers" not allowed)? Check:
+  `gcloud org-policies describe iam.allowedPolicyMemberDomains --project=$PROJECT --effective` and
+  `gcloud run services get-iam-policy causmos-service --region=$REGION` (is `allUsers` there on the existing service?).
+  If public access is blocked, the deploy succeeds but the login page returns 403.
+- GitHub: the trigger needs the Cloud Build GitHub connection to `mjahmed1280/pmax-themer-app` (a personal GitHub account). IT may prefer the repo inside the client's GitHub org.
+
+`scripts/preflight.py` (step 1 of the build) verifies A and B with `testIamPermissions` and lists every gap in one failure.
 
 ## What cloudbuild.yaml does on every push to `main`
 1. **preflight**: the 3 secrets exist and are valid (JSON has all 4 keys, password 12+, key 32+), Cloud Build can reach Cloud Run in the region.
