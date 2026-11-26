@@ -339,3 +339,12 @@ def test_multi_user_config_validation(tmp_path):
         make(tmp_path, **{**BASIC, "app_users_json": _json.dumps({"a@b.com": "short"})})
     with pytest.raises(RuntimeError):
         make(tmp_path, **{**BASIC, "app_users_json": "[1,2]"})
+
+
+def test_web_client_json_wins_over_client_in_credentials_json():
+    import json
+    web = json.dumps({"web": {"client_id": "WEB-ID", "client_secret": "WEB-SEC"}})
+    creds = json.dumps({"developer_token": "dev", "client_id": "OLD-ID", "client_secret": "OLD-SEC", "refresh_token": "r"})
+    s = Settings(_env_file=None, google_oauth_client_json=web, google_ads_credentials_json=creds)
+    assert (s.google_ads_client_id, s.google_ads_client_secret) == ("WEB-ID", "WEB-SEC")
+    assert s.google_ads_developer_token == "dev"

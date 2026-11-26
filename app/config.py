@@ -64,6 +64,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _load_client_json(self):
+        # The dedicated OAuth *web* client JSON wins over the client inside GOOGLE_ADS_CREDENTIALS_JSON
+        # (ADS_ACCESS=user needs the web client whose redirect URI is registered).
+        if self.google_oauth_client_json.strip() and not (self.google_ads_client_id and self.google_ads_client_secret):
+            import json
+            try:
+                raw = json.loads(self.google_oauth_client_json)
+                blk = raw.get("web") or raw.get("installed") or raw
+                self.google_ads_client_id = self.google_ads_client_id or blk["client_id"]
+                self.google_ads_client_secret = self.google_ads_client_secret or blk["client_secret"]
+            except Exception:
+                raise ValueError("GOOGLE_OAUTH_CLIENT_JSON is not a valid OAuth client JSON") from None
         if self.google_ads_credentials_json.strip():
             import json
             try:
@@ -75,15 +86,6 @@ class Settings(BaseSettings):
                         setattr(self, field, str(d[key]))
             except Exception:
                 raise ValueError("GOOGLE_ADS_CREDENTIALS_JSON is not valid JSON") from None
-        if self.google_oauth_client_json.strip() and not (self.google_ads_client_id and self.google_ads_client_secret):
-            import json
-            try:
-                raw = json.loads(self.google_oauth_client_json)
-                blk = raw.get("web") or raw.get("installed") or raw
-                self.google_ads_client_id = self.google_ads_client_id or blk["client_id"]
-                self.google_ads_client_secret = self.google_ads_client_secret or blk["client_secret"]
-            except Exception:
-                raise ValueError("GOOGLE_OAUTH_CLIENT_JSON is not a valid OAuth client JSON") from None
         return self
 
     @field_validator("env", "auth_mode", "ads_backend", "ads_access")
