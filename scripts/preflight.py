@@ -55,8 +55,14 @@ else:
             problems.append("secret 'gads-credentials' JSON is missing keys: " + ", ".join(miss))
     except ValueError:
         problems.append("secret 'gads-credentials' is not valid JSON")
-if len(os.environ.get("APP_PW", "")) < 12:
-    problems.append("secret 'pmax-app-password' is missing or shorter than 12 characters")
+try:
+    users = json.loads(os.environ.get("APP_USERS", ""))
+    bad = [u for u, pw in users.items() if "@" not in u or len(str(pw)) < 12]
+    if not isinstance(users, dict) or not users or bad:
+        problems.append("secret 'pmax-app-users' must be a JSON object {email: password} with 12+ char passwords"
+                        + (f" (check: {', '.join(bad)})" if bad else ""))
+except (ValueError, AttributeError):
+    problems.append("secret 'pmax-app-users' is missing/empty or not valid JSON")
 if len(os.environ.get("SECRET_KEY_VAL", "")) < 32:
     problems.append("secret 'pmax-secret-key' is missing or shorter than 32 characters")
 
